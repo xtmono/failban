@@ -1,0 +1,27 @@
+# Build artifacts
+*.o
+*.a
+build/
+
+# Executables
+/failban
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!openwrt-toolchain.cmake
+!CMakeLists.txt
+
+# macOS
+.DS_Store
+*.dSYM/
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

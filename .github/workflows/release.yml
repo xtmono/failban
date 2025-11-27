@@ -1,0 +1,115 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '*'  # Trigger on any tag
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write
+
+env:
+  OPENWRT_VERSION: 24.10.4
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ubuntu-latest
+    container:
+      image: debian:12
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - mediatek-filogic
+          - ath79-generic
+
+    env:
+      RELEASE_NAME: failban-${{ matrix.platform }}
+
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y git cmake wget zstd
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download OpenWrt SDK
+        run: |
+          TARGET=$(echo "${{ matrix.platform }}" | sed 's/-/\//')
+          wget -r -l1 -np -nd \
+            -A "openwrt-sdk-${OPENWRT_VERSION}-${{ matrix.platform }}_*_musl.Linux-x86_64.tar.zst" \
+            https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${TARGET}/
+          SDK_FILE=$(find . -name "openwrt-sdk-*.tar.zst" -type f)
+          tar -I zstd -xf "$SDK_FILE"
+
+      - name: Build failban
+        run: |
+          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*" -type d)
+          export STAGING_DIR=$PWD/${SDK_DIR}/staging_dir
+          cmake -B build
+          cmake --build build
+
+      - name: Prepare release artifacts
+        run: |
+          mkdir -p release/conf release/init
+          cp build/failban release/failban
+          cp conf/failban.conf release/conf/
+          cp init/failban release/init/
+          chmod +x release/failban release/init/failban
+
+          # Create tarball without 'release' directory prefix
+          tar -czf ${RELEASE_NAME}.tar.gz -C release .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.RELEASE_NAME }}
+          path: ${{ env.RELEASE_NAME }}.tar.gz
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/*.tar.gz
+          body: |
+            ## Failban Release
+
+            Compiled for OpenWrt ${{ env.OPENWRT_VERSION }}
+
+            ### Installation
+
+            Download the `failban-*.tar.gz` file matching your platform.
+
+            ```bash
+            # 1. Upload to router (replace 'failban-xxx.tar.gz' with your downloaded file)
+            scp -O failban-*.tar.gz root@router:/tmp/failban.tar.gz
+
+            # 2. Extract and install
+            ssh root@router "tar -xzf /tmp/failban.tar.gz -C /tmp/"
+            ssh root@router "cp /tmp/failban /usr/bin/; cp /tmp/conf/failban.conf /etc/; cp /tmp/init/failban /etc/init.d/"
+
+            # 3. Enable and start service
+            ssh root@router "chmod +x /usr/bin/failban /etc/init.d/failban"
+            ssh root@router "service failban enable && service failban start"
+            ```
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
